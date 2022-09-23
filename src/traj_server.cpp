@@ -99,19 +99,20 @@ public:
         _cmd.kv[_DIM_z] = vel_gain[_DIM_z];
     }
 
-    void rcvOdometryCallback(const nav_msgs::Odometry & odom)
+    void rcvOdometryCallback(const nav_msgs::Odometry &odom)
     {
-        if (odom.child_frame_id == "X" || odom.child_frame_id == "O") return ;
+        if (odom.child_frame_id == "X" || odom.child_frame_id == "O")
+            return;
         // #1. store the odometry
         _odom = odom;
         _vis_cmd.header = _odom.header;
         _vis_cmd.header.frame_id = "/world";
 
-        if(state == INIT )
+        if (state == INIT)
         {
             //ROS_WARN("[TRAJ SERVER] Pub initial pos command");
-            _cmd.position   = _odom.pose.pose.position;
-            
+            _cmd.position = _odom.pose.pose.position;
+
             _cmd.header.stamp = _odom.header.stamp;
             _cmd.header.frame_id = "/world";
             _cmd.trajectory_flag = _traj_flag;
@@ -119,7 +120,7 @@ public:
             _cmd.velocity.x = 0.0;
             _cmd.velocity.y = 0.0;
             _cmd.velocity.z = 0.0;
-            
+
             _cmd.acceleration.x = 0.0;
             _cmd.acceleration.y = 0.0;
             _cmd.acceleration.z = 0.0;
@@ -136,48 +137,50 @@ public:
         pubPositionCommand();
 
         // #3. try to calculate the new state
-        if (state == TRAJ && ( (odom.header.stamp - _start_time).toSec() / mag_coeff > (_final_time - _start_time).toSec() ) )
+        // 轨迹执行完成
+        if (state == TRAJ && ((odom.header.stamp - _start_time).toSec() / mag_coeff > (_final_time - _start_time).toSec()))
         {
             state = HOVER;
             _traj_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_COMPLETED;
         }
     }
 
-    void rcvTrajectoryCallabck(const quadrotor_msgs::PolynomialTrajectory & traj)
+    void rcvTrajectoryCallabck(const quadrotor_msgs::PolynomialTrajectory &traj)
     {
         if (traj.action == quadrotor_msgs::PolynomialTrajectory::ACTION_ADD)
-        {   
+        {
             ROS_WARN("[SERVER] Loading the trajectory.");
-            if ((int)traj.trajectory_id < _traj_id) return ;
+            if ((int)traj.trajectory_id < _traj_id) // 新的轨迹id <　以前的轨迹id
+                return;
 
             state = TRAJ;
             _traj_flag = quadrotor_msgs::PositionCommand::TRAJECTORY_STATUS_READY;
             _traj_id = traj.trajectory_id;
             _n_segment = traj.num_segment;
-            _final_time = _start_time = traj.header.stamp;
+            _final_time = _start_time = traj.header.stamp; // traj.header.stamp为odom的时间戳, 为轨迹的起始时间
             _time.resize(_n_segment);
 
             _order.clear();
             for (int idx = 0; idx < _n_segment; ++idx)
             {
-                _final_time += ros::Duration(traj.time[idx]);
+                _final_time += ros::Duration(traj.time[idx]); // _final_time为轨迹末端的时间, 规划yaw时候使用
                 _time(idx) = traj.time[idx];
                 _order.push_back(traj.order[idx]);
             }
 
             _start_yaw = traj.start_yaw;
             _final_yaw = traj.final_yaw;
-            mag_coeff  = traj.mag_coeff;
+            mag_coeff = traj.mag_coeff; // 1.0
 
-            int max_order = *max_element( begin( _order ), end( _order ) ); 
-            
-            _coef[_DIM_x] = MatrixXd::Zero(max_order + 1, _n_segment);
+            int max_order = *max_element(begin(_order), end(_order));
+
+            _coef[_DIM_x] = MatrixXd::Zero(max_order + 1, _n_segment); // 多项式系数
             _coef[_DIM_y] = MatrixXd::Zero(max_order + 1, _n_segment);
             _coef[_DIM_z] = MatrixXd::Zero(max_order + 1, _n_segment);
-            
+
             int shift = 0;
             for (int idx = 0; idx < _n_segment; ++idx)
-            {     
+            {
                 int order = traj.order[idx];
 
                 for (int j = 0; j < (order + 1); ++j)
@@ -190,7 +193,7 @@ public:
                 shift += (order + 1);
             }
         }
-        else if (traj.action == quadrotor_msgs::PolynomialTrajectory::ACTION_ABORT) 
+        else if (traj.action == quadrotor_msgs::PolynomialTrajectory::ACTION_ABORT)
         {
             ROS_WARN("[SERVER] Aborting the trajectory.");
             state = HOVER;
@@ -203,12 +206,16 @@ public:
         }
     }
 
+    // 在rcvOdometryCallback中调用
     void pubPositionCommand()
     {
-        if (state == INIT) return;
-        if (state == HOVER)
+        // state为无人机的状态
+        if (state == INIT)
+            return;
+        if (state == HOVER) // HOVER的三种情况: 1.完成执行整条轨迹  2.轨迹失效  3.生成轨迹失败
         {
-            if (_cmd.header.frame_id != "/world"){
+            if (_cmd.header.frame_id != "/world") // ?
+            {
                 _cmd.position = _odom.pose.pose.position;
             }
 
@@ -219,13 +226,13 @@ public:
             _cmd.velocity.x = 0.0;
             _cmd.velocity.y = 0.0;
             _cmd.velocity.z = 0.0;
-            
+
             _cmd.acceleration.x = 0.0;
             _cmd.acceleration.y = 0.0;
             _cmd.acceleration.z = 0.0;
         }
 
-        if (state == TRAJ)
+        if (state == TRAJ) // 执行轨迹状态
         {
             _cmd.header.stamp = _odom.header.stamp;
 
@@ -233,9 +240,10 @@ public:
             _cmd.trajectory_flag = _traj_flag;
             _cmd.trajectory_id = _traj_id;
 
-            double t = max(0.0, (_odom.header.stamp - _start_time).toSec());
+            double t = max(0.0, (_odom.header.stamp - _start_time).toSec()); // _start_time为轨迹的起始时间
 
             _cmd.yaw_dot = 0.0;
+            // 规划角度
             _cmd.yaw = _start_yaw + (_final_yaw - _start_yaw) * t / ((_final_time - _start_time).toSec() + 1e-9);
 
             for (int idx = 0; idx < _n_segment; ++idx)
@@ -245,8 +253,8 @@ public:
                     t -= _time[idx];
                 }
                 else
-                {   
-                        t /= _time[idx];
+                {
+                        t /= _time[idx]; // t = _odom.header.stamp - _start_time
 
                         _cmd.position.x = 0.0;
                         _cmd.position.y = 0.0;
@@ -262,13 +270,15 @@ public:
                         int cur_poly_num = cur_order + 1;
 
                         for(int i = 0; i < cur_poly_num; i ++)
-                        {
-                            _cmd.position.x += _time[idx] * CList[cur_order](i) * _coef[_DIM_x].col(idx)(i) * pow(t, i) * pow((1 - t), (cur_order - i) ); 
-                            _cmd.position.y += _time[idx] * CList[cur_order](i) * _coef[_DIM_y].col(idx)(i) * pow(t, i) * pow((1 - t), (cur_order - i) ); 
-                            _cmd.position.z += _time[idx] * CList[cur_order](i) * _coef[_DIM_z].col(idx)(i) * pow(t, i) * pow((1 - t), (cur_order - i) ); 
+                        {   
+                            // position = s * Ci * Ｃni * t^i * (1-t)^(n-i)
+                            _cmd.position.x += _time[idx] * CList[cur_order](i) * _coef[_DIM_x].col(idx)(i) * pow(t, i) * pow((1 - t), (cur_order - i));
+                            _cmd.position.y += _time[idx] * CList[cur_order](i) * _coef[_DIM_y].col(idx)(i) * pow(t, i) * pow((1 - t), (cur_order - i));
+                            _cmd.position.z += _time[idx] * CList[cur_order](i) * _coef[_DIM_z].col(idx)(i) * pow(t, i) * pow((1 - t), (cur_order - i));
 
                             if(i < (cur_poly_num - 1))
                             {
+                                // velocity = 1 * n * [C(i+1) - C(i)] * Ｃni * t^i * (1-t)^(n-i)
                                 _cmd.velocity.x += CvList[cur_order](i) * cur_order * (_coef[_DIM_x].col(idx)(i+1) - _coef[_DIM_x].col(idx)(i)) 
                                                 * pow(t, i) * pow((1 - t), (cur_order - 1 - i) );
                                 
@@ -281,6 +291,7 @@ public:
 
                             if(i < (cur_poly_num - 2))
                             {   
+                                // acceleration = 1 / s * n * (n-1) * [C(i+2) - 2*C(i+1) + C(i)] * Ｃni * t^i * (1-t)^(n-i)
                                 _cmd.acceleration.x += 1.0 / _time[idx] * CaList[cur_order](i) * cur_order * (cur_order - 1) 
                                                     * (_coef[_DIM_x].col(idx)(i+2) - 2*_coef[_DIM_x].col(idx)(i+1) + _coef[_DIM_x].col(idx)(i)) 
                                                     * pow(t, i) * pow((1 - t), (cur_order - 2 - i) );
@@ -295,8 +306,8 @@ public:
                             }
 
                         }
-                    break;
-                } 
+                    break; // 只计算_odom.header.stamp时间点的控制信息
+                }
             }
         }
 

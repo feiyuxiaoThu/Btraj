@@ -124,25 +124,27 @@ void rcvOdometryCallbck(const nav_msgs::Odometry odom)
     _odom = odom;
     _has_odom = true;
 
+    // 每次local_map的原点
     _start_pt(0)  = _odom.pose.pose.position.x;
     _start_pt(1)  = _odom.pose.pose.position.y;
-    _start_pt(2)  = _odom.pose.pose.position.z;    
+    _start_pt(2)  = _odom.pose.pose.position.z;
 
     _start_vel(0) = _odom.twist.twist.linear.x;
     _start_vel(1) = _odom.twist.twist.linear.y;
-    _start_vel(2) = _odom.twist.twist.linear.z;    
+    _start_vel(2) = _odom.twist.twist.linear.z;
 
     _start_acc(0) = _odom.twist.twist.angular.x;
     _start_acc(1) = _odom.twist.twist.angular.y;
-    _start_acc(2) = _odom.twist.twist.angular.z;    
+    _start_acc(2) = _odom.twist.twist.angular.z;
 
-    if( std::isnan(_odom.pose.pose.position.x) || std::isnan(_odom.pose.pose.position.y) || std::isnan(_odom.pose.pose.position.z))
+    if (std::isnan(_odom.pose.pose.position.x) || std::isnan(_odom.pose.pose.position.y) || std::isnan(_odom.pose.pose.position.z))
         return;
-    
+
     static tf::TransformBroadcaster br;
     tf::Transform transform;
-    transform.setOrigin( tf::Vector3(_odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose.pose.position.z) );
+    transform.setOrigin(tf::Vector3(_odom.pose.pose.position.x, _odom.pose.pose.position.y, _odom.pose.pose.position.z));
     transform.setRotation(tf::Quaternion(0, 0, 0, 1.0));
+    // tf用于rviz显示模型
     br.sendTransform(tf::StampedTransform(transform, ros::Time::now(), "world", "quadrotor"));
 }
 
@@ -161,7 +163,7 @@ void rcvWaypointsCallback(const nav_msgs::Path & wp)
 
     ROS_INFO("[Fast Marching Node] receive the way-points");
 
-    trajPlanning(); 
+    trajPlanning();    // 第一条轨迹的生成
 }
 
 Vector3d _local_origin;
@@ -175,28 +177,30 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 & pointcloud_map)
 
     delete collision_map_local;
 
-    ros::Time time_1 = ros::Time::now();
+    // ros::Time time_1 = ros::Time::now();
+    
     collision_map->RestMap();
     
+    // 以右下角为local_map的原点,当前机器人处于local_map的中心位置
     double local_c_x = (int)((_start_pt(0) - _x_local_size/2.0)  * _inv_resolution + 0.5) * _resolution;
     double local_c_y = (int)((_start_pt(1) - _y_local_size/2.0)  * _inv_resolution + 0.5) * _resolution;
     double local_c_z = (int)((_start_pt(2) - _z_local_size/2.0)  * _inv_resolution + 0.5) * _resolution;
 
-    _local_origin << local_c_x, local_c_y, local_c_z;
+    _local_origin << local_c_x, local_c_y, local_c_z;   // 当前local_map的原点
 
     Translation3d origin_local_translation( _local_origin(0), _local_origin(1), _local_origin(2));
     Quaterniond origin_local_rotation(1.0, 0.0, 0.0, 0.0);
 
     Affine3d origin_local_transform = origin_local_translation * origin_local_rotation;
     
-    double _buffer_size = 2 * _MAX_Vel;
-    double _x_buffer_size = _x_local_size + _buffer_size;
+    double _buffer_size = 2 * _MAX_Vel;    // 速度越大,local_map范围越大?
+    double _x_buffer_size = _x_local_size + _buffer_size;   // *_local_size为局部地图的范围
     double _y_buffer_size = _y_local_size + _buffer_size;
     double _z_buffer_size = _z_local_size + _buffer_size;
 
     collision_map_local = new CollisionMapGrid(origin_local_transform, "world", _resolution, _x_buffer_size, _y_buffer_size, _z_buffer_size, _free_cell);
 
-    vector<pcl::PointXYZ> inflatePts(20);
+    vector<pcl::PointXYZ> inflatePts(20);   // 初始化20个元素
     pcl::PointCloud<pcl::PointXYZ> cloud_inflation;
     pcl::PointCloud<pcl::PointXYZ> cloud_local;
 
@@ -205,18 +209,19 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 & pointcloud_map)
         auto mk = cloud.points[idx];
         pcl::PointXYZ pt(mk.x, mk.y, mk.z);
 
+        // 感知到的地图是通过kd-tree在半径为15的圆内搜索的点,local_map是边长为15的正方形,所以需要裁剪
         if( fabs(pt.x - _start_pt(0)) > _x_local_size / 2.0 || fabs(pt.y - _start_pt(1)) > _y_local_size / 2.0 || fabs(pt.z - _start_pt(2)) > _z_local_size / 2.0 )
             continue; 
         
-        cloud_local.push_back(pt);
-        inflatePts = pointInflate(pt);
+        cloud_local.push_back(pt);      // 用于显示
+        inflatePts = pointInflate(pt);  // 用于显示
         for(int i = 0; i < (int)inflatePts.size(); i++)
         {   
             pcl::PointXYZ inf_pt = inflatePts[i];
             Vector3d addPt(inf_pt.x, inf_pt.y, inf_pt.z);
-            collision_map_local->Set3d(addPt, _obst_cell);
+            collision_map_local->Set3d(addPt, _obst_cell);  // 将膨胀后的地图用作碰撞检测
             collision_map->Set3d(addPt, _obst_cell);
-            cloud_inflation.push_back(inf_pt);
+            cloud_inflation.push_back(inf_pt);  // 这里将所有膨胀后的点云都显示出来了,没有剪枝,数据量太大会造成卡顿
         }
     }
     _has_map = true;
@@ -238,13 +243,14 @@ void rcvPointCloudCallBack(const sensor_msgs::PointCloud2 & pointcloud_map)
     _inf_map_vis_pub.publish(inflateMap);
     _local_map_vis_pub.publish(localMap);
 
-    ros::Time time_3 = ros::Time::now();
-    //ROS_WARN("Time in receving the map is %f", (time_3 - time_1).toSec());
+    // ros::Time time_3 = ros::Time::now();
+    // ROS_WARN("Time in receving the map is %f", (time_3 - time_1).toSec());
 
-    if( checkExecTraj() == true )
+    if( checkExecTraj() == true )   // 检查轨迹,若碰到障碍,重新规划
         trajPlanning(); 
 }
 
+// 将一个点膨胀成多个点
 vector<pcl::PointXYZ> pointInflate( pcl::PointXYZ pt)
 {
     int num   = int(_cloud_margin * _inv_resolution);
@@ -252,6 +258,7 @@ vector<pcl::PointXYZ> pointInflate( pcl::PointXYZ pt)
     vector<pcl::PointXYZ> infPts(20);
     pcl::PointXYZ pt_inf;
 
+    // 这里效率不高:　相邻的点云分别膨胀后会有重叠的点，降低效率
     for(int x = -num ; x <= num; x ++ )
         for(int y = -num ; y <= num; y ++ )
             for(int z = -num_z ; z <= num_z; z ++ )
@@ -316,47 +323,48 @@ bool checkExecTraj()
     for (idx = 0; idx < _seg_num; ++idx)
     {
         if( t_s  > _seg_time(idx) && idx + 1 < _seg_num)
-            t_s -= _seg_time(idx);
+            t_s -= _seg_time(idx);  // idx: 当前帧odom的时间戳所对应的那一段轨迹, t_s: 当前相对于那一段轨迹起点的时间
         else 
             break;
     }
 
     double duration = 0.0;
     double t_ss;
-    for(int i = idx; i < _seg_num; i++ )
+    for (int i = idx; i < _seg_num; i++) // 检测从当前位置到轨迹末端是否触碰障碍, 同时显示轨迹
     {
-        t_ss = (i == idx) ? t_s : 0.0;
-        for(double t = t_ss; t < _seg_time(i); t += 0.01)
+        t_ss = (i == idx) ? t_s : 0.0; // 每一段轨迹的起点, 若为第一段轨迹, 从起始时间开始遍历, 若不是当前段轨迹, 则需要完整遍历
+        for (double t = t_ss; t < _seg_time(i); t += 0.01)
         {
-            double t_d = duration + t - t_ss;
-            if( t_d > _check_horizon ) break;
-            traj_pt = getPosFromBezier( _bezier_coeff, t/_seg_time(i), i );
-            pt.x = traj_pt(0) = _seg_time(i) * traj_pt(0); 
-            pt.y = traj_pt(1) = _seg_time(i) * traj_pt(1);
+            double t_d = duration + t - t_ss; // 相对于轨迹起点的delta_t
+            if (t_d > _check_horizon) // 超出检查范围, 退出
+                break;
+            traj_pt = getPosFromBezier(_bezier_coeff, t / _seg_time(i), i); // 这里的t是相对于当前段轨迹起点的时间
+            pt.x = traj_pt(0) = _seg_time(i) * traj_pt(0);
+            pt.y = traj_pt(1) = _seg_time(i) * traj_pt(1); // _seg_time(i)为比例系数
             pt.z = traj_pt(2) = _seg_time(i) * traj_pt(2);
 
             _check_traj_vis.points.push_back(pt);
 
-            if( t_d <= _stop_horizon ) 
+            if (t_d <= _stop_horizon)
                 _stop_traj_vis.points.push_back(pt);
 
-            if( checkCoordObs(traj_pt))
-            {   
-                ROS_WARN("predicted collision time is %f ahead", t_d);
-                
-                if( t_d <= _stop_horizon ) 
-                {   
-                    ROS_ERROR("emergency occurs in time is %f ahead", t_d);
+            if (checkCoordObs(traj_pt))
+            {
+                ROS_WARN("predicted collision time is %f ahead", t_d);  // 轨迹上出现障碍, 重新规划
+
+                if (t_d <= _stop_horizon)
+                {
+                    ROS_ERROR("emergency occurs in time is %f ahead", t_d);  // 坠机
                     _is_emerg = true;
                 }
 
                 _checkTraj_vis_pub.publish(_check_traj_vis);
-                _stopTraj_vis_pub.publish(_stop_traj_vis); 
+                _stopTraj_vis_pub.publish(_stop_traj_vis);
 
                 return true;
             }
         }
-        duration += _seg_time(i) - t_ss;
+        duration += _seg_time(i) - t_ss; // 每一段的累计时间长度 
     }
 
     _checkTraj_vis_pub.publish(_check_traj_vis); 
@@ -377,8 +385,10 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
 {   
     Cube cubeMax = cube;
 
-    // Inflate sequence: left, right, front, back, below, above                                                                                
+    // Inflate sequence: right, left, front, back, above, below                                                                              
     MatrixXi vertex_idx(8, 3);
+    
+    // 判断当前的路径点是否触碰障碍,因为传入的cube是一个点
     for (int i = 0; i < 8; i++)
     { 
         double coord_x = max(min(cube.vertex(i, 0), _pt_max_x), _pt_min_x);
@@ -387,14 +397,14 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
         Vector3d coord(coord_x, coord_y, coord_z);
 
         Vector3i pt_idx = collision_map->LocationToGridIndex(coord);
-
+        
         if( collision_map->Get( (int64_t)pt_idx(0), (int64_t)pt_idx(1), (int64_t)pt_idx(2) ).first.occupancy > 0.5 )
         {       
             ROS_ERROR("[Planning Node] path has node in obstacles !");
             return make_pair(cubeMax, false);
         }
         
-        vertex_idx.row(i) = pt_idx;
+        vertex_idx.row(i) = pt_idx;  // 若未触碰障碍,将该点的x, y, z坐标赋值给vertex_idx的对应行,等待膨胀
     }
 
     int id_x, id_y, id_z;
@@ -410,30 +420,69 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
             P5------------P6              / x
     */           
 
-    // Y- now is the left side : (p1 -- p4 -- p8 -- p5) face sweep
-    // ############################################################################################################
     bool collide;
 
-    MatrixXi vertex_idx_lst = vertex_idx;
+    MatrixXi vertex_idx_lst = vertex_idx;   // 存储未膨胀前cube的idx
 
+    // 依次将cube的某个面(例如P1-P4-P8-P5)向对应的坐标轴方向扩展_step_length, 并检查这个面是否触碰障碍物
     int iter = 0;
-    while(iter < _max_inflate_iter)
+    while(iter < _max_inflate_iter) // 迭代次数也就是最大扩展距离
     {   
-        collide  = false; 
+        // Y Axis
         int y_lo = max(0, vertex_idx(0, 1) - _step_length);
         int y_up = min(_max_y_id, vertex_idx(1, 1) + _step_length);
 
-        for(id_y = vertex_idx(0, 1); id_y >= y_lo; id_y-- )
+        // Y+ now is the right side : (p2 -- p3 -- p7 -- p6) face
+        // ############################################################################################################
+        collide = false;
+        for(id_y = vertex_idx(1, 1); id_y <= y_up; id_y++ )
         {   
             if( collide == true) 
                 break;
             
-            for(id_x = vertex_idx(0, 0); id_x >= vertex_idx(3, 0); id_x-- )
+            for(id_x = vertex_idx(1, 0); id_x >= vertex_idx(2, 0); id_x-- ) // P2P3
+            {
+                if( collide == true) 
+                    break;
+
+                for(id_z = vertex_idx(1, 2); id_z >= vertex_idx(5, 2); id_z-- ) // P2P6
+                {
+                    double occupy = collision_map->Get( (int64_t)id_x, (int64_t)id_y, (int64_t)id_z).first.occupancy;    
+                    if(occupy > 0.5) // the voxel is occupied
+                    {   
+                        collide = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if(collide)
+        {
+            vertex_idx(1, 1) = max(id_y-2, vertex_idx(1, 1));   // _step_length = 1, 若有障碍说明之前cube就已经到达边界 
+            vertex_idx(2, 1) = max(id_y-2, vertex_idx(2, 1));   // 此时id_y = y_up+1
+            vertex_idx(6, 1) = max(id_y-2, vertex_idx(6, 1));   // max函数的意义不明
+            vertex_idx(5, 1) = max(id_y-2, vertex_idx(5, 1));
+        }
+        else
+            vertex_idx(1, 1) = vertex_idx(2, 1) = vertex_idx(6, 1) = vertex_idx(5, 1) = id_y - 1;  // for循环后id_y = y_up+1
+
+
+        // Y- now is the left side : (p1 -- p4 -- p8 -- p5) face 
+        // ############################################################################################################
+        collide  = false;
+
+        for(id_y = vertex_idx(0, 1); id_y >= y_lo; id_y-- ) 
+        {   
+            if( collide == true)   // 退出多层for循环
+                break;
+            
+            for(id_x = vertex_idx(0, 0); id_x >= vertex_idx(3, 0); id_x-- ) // P1P4
             {    
                 if( collide == true) 
                     break;
 
-                for(id_z = vertex_idx(0, 2); id_z >= vertex_idx(4, 2); id_z-- )
+                for(id_z = vertex_idx(0, 2); id_z >= vertex_idx(4, 2); id_z-- ) // P1P5
                 {
                     double occupy = collision_map->Get( (int64_t)id_x, (int64_t)id_y, (int64_t)id_z).first.occupancy;    
                     if(occupy > 0.5) // the voxel is occupied
@@ -453,47 +502,15 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
             vertex_idx(4, 1) = min(id_y+2, vertex_idx(4, 1));
         }
         else
-            vertex_idx(0, 1) = vertex_idx(3, 1) = vertex_idx(7, 1) = vertex_idx(4, 1) = id_y + 1;
+            vertex_idx(0, 1) = vertex_idx(3, 1) = vertex_idx(7, 1) = vertex_idx(4, 1) = id_y + 1;   
         
-        // Y+ now is the right side : (p2 -- p3 -- p7 -- p6) face
-        // ############################################################################################################
-        collide = false;
-        for(id_y = vertex_idx(1, 1); id_y <= y_up; id_y++ )
-        {   
-            if( collide == true) 
-                break;
-            
-            for(id_x = vertex_idx(1, 0); id_x >= vertex_idx(2, 0); id_x-- )
-            {
-                if( collide == true) 
-                    break;
 
-                for(id_z = vertex_idx(1, 2); id_z >= vertex_idx(5, 2); id_z-- )
-                {
-                    double occupy = collision_map->Get( (int64_t)id_x, (int64_t)id_y, (int64_t)id_z).first.occupancy;    
-                    if(occupy > 0.5) // the voxel is occupied
-                    {   
-                        collide = true;
-                        break;
-                    }
-                }
-            }
-        }
 
-        if(collide)
-        {
-            vertex_idx(1, 1) = max(id_y-2, vertex_idx(1, 1));
-            vertex_idx(2, 1) = max(id_y-2, vertex_idx(2, 1));
-            vertex_idx(6, 1) = max(id_y-2, vertex_idx(6, 1));
-            vertex_idx(5, 1) = max(id_y-2, vertex_idx(5, 1));
-        }
-        else
-            vertex_idx(1, 1) = vertex_idx(2, 1) = vertex_idx(6, 1) = vertex_idx(5, 1) = id_y - 1;
-
-        // X + now is the front side : (p1 -- p2 -- p6 -- p5) face
-        // ############################################################################################################
+        // X Axis
         int x_lo = max(0, vertex_idx(3, 0) - _step_length);
         int x_up = min(_max_x_id, vertex_idx(0, 0) + _step_length);
+        // X + now is the front side : (p1 -- p2 -- p6 -- p5) face
+        // ############################################################################################################
 
         collide = false;
         for(id_x = vertex_idx(0, 0); id_x <= x_up; id_x++ )
@@ -501,12 +518,12 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
             if( collide == true) 
                 break;
             
-            for(id_y = vertex_idx(0, 1); id_y <= vertex_idx(1, 1); id_y++ )
+            for(id_y = vertex_idx(0, 1); id_y <= vertex_idx(1, 1); id_y++ ) // P1P2
             {
                 if( collide == true) 
                     break;
 
-                for(id_z = vertex_idx(0, 2); id_z >= vertex_idx(4, 2); id_z-- )
+                for(id_z = vertex_idx(0, 2); id_z >= vertex_idx(4, 2); id_z-- ) // P1P5
                 {
                     double occupy = collision_map->Get( (int64_t)id_x, (int64_t)id_y, (int64_t)id_z).first.occupancy;    
                     if(occupy > 0.5) // the voxel is occupied
@@ -536,12 +553,12 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
             if( collide == true) 
                 break;
             
-            for(id_y = vertex_idx(3, 1); id_y <= vertex_idx(2, 1); id_y++ )
+            for(id_y = vertex_idx(3, 1); id_y <= vertex_idx(2, 1); id_y++ ) // P4P3
             {
                 if( collide == true) 
                     break;
 
-                for(id_z = vertex_idx(3, 2); id_z >= vertex_idx(7, 2); id_z-- )
+                for(id_z = vertex_idx(3, 2); id_z >= vertex_idx(7, 2); id_z-- ) //P4P8
                 {
                     double occupy = collision_map->Get( (int64_t)id_x, (int64_t)id_y, (int64_t)id_z).first.occupancy;    
                     if(occupy > 0.5) // the voxel is occupied
@@ -563,22 +580,23 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
         else
             vertex_idx(3, 0) = vertex_idx(2, 0) = vertex_idx(6, 0) = vertex_idx(7, 0) = id_x + 1;
 
+
+        int z_lo = max(0, vertex_idx(4, 2) - _step_length);
+        int z_up = min(_max_z_id, vertex_idx(0, 2) + _step_length);
         // Z+ now is the above side : (p1 -- p2 -- p3 -- p4) face
         // ############################################################################################################
         collide = false;
-        int z_lo = max(0, vertex_idx(4, 2) - _step_length);
-        int z_up = min(_max_z_id, vertex_idx(0, 2) + _step_length);
         for(id_z = vertex_idx(0, 2); id_z <= z_up; id_z++ )
         {   
             if( collide == true) 
                 break;
             
-            for(id_y = vertex_idx(0, 1); id_y <= vertex_idx(1, 1); id_y++ )
+            for(id_y = vertex_idx(0, 1); id_y <= vertex_idx(1, 1); id_y++ ) // P1P2
             {
                 if( collide == true) 
                     break;
 
-                for(id_x = vertex_idx(0, 0); id_x >= vertex_idx(3, 0); id_x-- )
+                for(id_x = vertex_idx(0, 0); id_x >= vertex_idx(3, 0); id_x-- ) // P1P4
                 {
                     double occupy = collision_map->Get( (int64_t)id_x, (int64_t)id_y, (int64_t)id_z).first.occupancy;    
                     if(occupy > 0.5) // the voxel is occupied
@@ -599,7 +617,7 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
         }
         vertex_idx(0, 2) = vertex_idx(1, 2) = vertex_idx(2, 2) = vertex_idx(3, 2) = id_z - 1;
 
-        // now is the below side : (p5 -- p6 -- p7 -- p8) face
+        // Z- now is the below side : (p5 -- p6 -- p7 -- p8) face
         // ############################################################################################################
         collide = false;
         for(id_z = vertex_idx(4, 2); id_z >= z_lo; id_z-- )
@@ -607,12 +625,12 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
             if( collide == true) 
                 break;
             
-            for(id_y = vertex_idx(4, 1); id_y <= vertex_idx(5, 1); id_y++ )
+            for(id_y = vertex_idx(4, 1); id_y <= vertex_idx(5, 1); id_y++ ) //P5P6
             {
                 if( collide == true) 
                     break;
 
-                for(id_x = vertex_idx(4, 0); id_x >= vertex_idx(7, 0); id_x-- )
+                for(id_x = vertex_idx(4, 0); id_x >= vertex_idx(7, 0); id_x-- ) // P5P8
                 {
                     double occupy = collision_map->Get( (int64_t)id_x, (int64_t)id_y, (int64_t)id_z).first.occupancy;    
                     if(occupy > 0.5) // the voxel is occupied
@@ -634,7 +652,9 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
         else
             vertex_idx(4, 2) = vertex_idx(5, 2) = vertex_idx(6, 2) = vertex_idx(7, 2) = id_z + 1;
 
-        if(vertex_idx_lst == vertex_idx)
+
+
+        if(vertex_idx_lst == vertex_idx)  // 膨胀one step,前后无变化,达到最大状态,跳出循环
             break;
 
         vertex_idx_lst = vertex_idx;
@@ -642,7 +662,7 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
         MatrixXd vertex_coord(8, 3);
         for(int i = 0; i < 8; i++)
         {   
-            int index_x = max(min(vertex_idx(i, 0), _max_x_id - 1), 0);
+            int index_x = max(min(vertex_idx(i, 0), _max_x_id - 1), 0);  // 这里为什么是_max_x_id-1和0?
             int index_y = max(min(vertex_idx(i, 1), _max_y_id - 1), 0);
             int index_z = max(min(vertex_idx(i, 2), _max_z_id - 1), 0);
 
@@ -651,14 +671,15 @@ pair<Cube, bool> inflateCube(Cube cube, Cube lstcube)
             vertex_coord.row(i) = pos;
         }
 
-        cubeMax.setVertex(vertex_coord, _resolution);
-        if( isContains(lstcube, cubeMax))        
+        // 使用vertex_idx继续迭代, 这里vertex_coord只是为了计算cubeMax(每次迭代后的cube)
+        cubeMax.setVertex(vertex_coord, _resolution);  // 将从collision_map->GridIndexToLocation(index)获得的顶点pos放入栅格中心
+        if( isContains(lstcube, cubeMax))  // 剪枝
             return make_pair(lstcube, false);
 
         iter ++;
     }
 
-    return make_pair(cubeMax, true);
+    return make_pair(cubeMax, true);   // 膨胀前后无变化,则达到最大状态    
 }
 
 Cube generateCube( Vector3d pt) 
@@ -680,9 +701,10 @@ Cube generateCube( Vector3d pt)
     pt(2) = max(min(pt(2), _pt_max_z), _pt_min_z);
 
     Vector3i pc_index = collision_map->LocationToGridIndex(pt);    
-    Vector3d pc_coord = collision_map->GridIndexToLocation(pc_index);
+    Vector3d pc_coord = collision_map->GridIndexToLocation(pc_index);   // 注意!这里转换后的coord不是在栅格中心了
 
     cube.center = pc_coord;
+
     double x_u = pc_coord(0);
     double x_l = pc_coord(0);
     
@@ -692,11 +714,11 @@ Cube generateCube( Vector3d pt)
     double z_u = pc_coord(2);
     double z_l = pc_coord(2);
 
+    // 将cube初始化为一个点
     cube.vertex.row(0) = Vector3d(x_u, y_l, z_u);  
     cube.vertex.row(1) = Vector3d(x_u, y_u, z_u);  
     cube.vertex.row(2) = Vector3d(x_l, y_u, z_u);  
     cube.vertex.row(3) = Vector3d(x_l, y_l, z_u);  
-
     cube.vertex.row(4) = Vector3d(x_u, y_l, z_l);  
     cube.vertex.row(5) = Vector3d(x_u, y_u, z_l);  
     cube.vertex.row(6) = Vector3d(x_l, y_u, z_l);  
@@ -705,7 +727,8 @@ Cube generateCube( Vector3d pt)
     return cube;
 }
 
-bool isContains(Cube cube1, Cube cube2)
+// cube1 >= cube2
+bool isContains(Cube cube1, Cube cube2) 
 {   
     if( cube1.vertex(0, 0) >= cube2.vertex(0, 0) && cube1.vertex(0, 1) <= cube2.vertex(0, 1) && cube1.vertex(0, 2) >= cube2.vertex(0, 2) &&
         cube1.vertex(6, 0) <= cube2.vertex(6, 0) && cube1.vertex(6, 1) >= cube2.vertex(6, 1) && cube1.vertex(6, 2) <= cube2.vertex(6, 2)  )
@@ -775,7 +798,7 @@ vector<Cube> corridorGeneration(vector<Vector3d> path_coord)
         Cube cube = generateCube(pt);
         auto result = inflateCube(cube, lstcube);
 
-        if(result.second == false)
+        if(result.second == false)  // 当前路径点膨胀一次之后的cube被上一个cube完全包含,对该点进行剪枝
             continue;
 
         cube = result.first;
@@ -942,7 +965,7 @@ void trajPlanning()
         delete fm_solver;
     }
     else
-    {   
+    {
         path_finder->linkLocalMap(collision_map_local, _local_origin);
         path_finder->AstarSearch(_start_pt, _end_pt);
         vector<Vector3d> gridPath = path_finder->getPath();
@@ -952,7 +975,7 @@ void trajPlanning()
         visGridPath(gridPath);
         visExpNode(searchedNodes);
 
-        ros::Time time_bef_corridor = ros::Time::now();    
+        ros::Time time_bef_corridor = ros::Time::now();
         corridor = corridorGeneration(gridPath);
         ros::Time time_aft_corridor = ros::Time::now();
         ROS_WARN("Time consume in corridor generation is %f", (time_aft_corridor - time_bef_corridor).toSec());
@@ -966,7 +989,7 @@ void trajPlanning()
     MatrixXd acc = MatrixXd::Zero(2,3);
 
     pos.row(0) = _start_pt;
-    pos.row(1) = _end_pt;    
+    pos.row(1) = _end_pt;
     vel.row(0) = _start_vel;
     acc.row(0) = _start_acc;
     
@@ -979,12 +1002,12 @@ void trajPlanning()
     {
         ROS_WARN("Cannot find a feasible and optimal solution, somthing wrong with the mosek solver");
           
-        if(_has_traj && _is_emerg)
+        if(_has_traj && _is_emerg)  // 生成轨迹失败或发生碰撞
         {
             _traj.action = quadrotor_msgs::PolynomialTrajectory::ACTION_WARN_IMPOSSIBLE;
             _traj_pub.publish(_traj);
             _has_traj = false;
-        } 
+        }
     }
     else
     {   
@@ -999,7 +1022,7 @@ void trajPlanning()
 
         _traj = getBezierTraj();
         _traj_pub.publish(_traj);
-        _traj_id ++;
+        _traj_id ++;  // 记录生成轨迹的次数
         visBezierTrajectory(_bezier_coeff, _seg_time);
     }
 
@@ -1102,11 +1125,13 @@ void timeAllocation(vector<Cube> & corridor, vector<double> time)
         corridor[i].t = tmp_time[i];
 }
 
+// 满足梯形速度曲线, 这个函数实现的好像有问题
 void timeAllocation(vector<Cube> & corridor)
 {   
     vector<Vector3d> points;
     points.push_back (_start_pt);
 
+    // 计算出的corridor的特点:第一个cube的边界点为第二个cube的center
     for(int i = 1; i < (int)corridor.size(); i++)
         points.push_back(corridor[i].center);
 
@@ -1117,45 +1142,46 @@ void timeAllocation(vector<Cube> & corridor)
 
     for (int k = 0; k < (int)points.size() - 1; k++)
     {
-          double dtxyz;
-          Vector3d p0   = points[k];        
-          Vector3d p1   = points[k + 1];    
-          Vector3d d    = p1 - p0;          
-          Vector3d v0(0.0, 0.0, 0.0);       
-          
-          if( k == 0) v0 = _start_vel;
+        double dtxyz;
+        Vector3d p0 = points[k];
+        Vector3d p1 = points[k + 1];
+        Vector3d d = p1 - p0;
+        Vector3d v0(0.0, 0.0, 0.0);
 
-          double D    = d.norm();                  
-          double V0   = v0.dot(d / D);             
-          double aV0  = fabs(V0);                  
+        if (k == 0)
+            v0 = _start_vel;    // _start_vel从odom中获得,为起始点的速度
 
-          double acct = (_Vel - V0) / _Acc * ((_Vel > V0)?1:-1);
-          double accd = V0 * acct + (_Acc * acct * acct / 2) * ((_Vel > V0)?1:-1);
-          double dcct = _Vel / _Acc;                                              
-          double dccd = _Acc * dcct * dcct / 2;                                   
+        double D = d.norm();    // 相邻两点的距离
+        double V0 = v0.dot(d / D);  // V0的含义???  V0 > 0:速度方向与目标点方向相同, V0 < 0:速度方向与目标点方向相反
+        double aV0 = fabs(V0);
 
-          if (D < aV0 * aV0 / (2 * _Acc))
-          {               
-            double t1 = (V0 < 0)?2.0 * aV0 / _Acc:0.0;
+        double acct = (_Vel - V0) / _Acc * ((_Vel > V0) ? 1 : -1);  // 加速时间
+        double accd = V0 * acct + (_Acc * acct * acct / 2) * ((_Vel > V0) ? 1 : -1);  // 加速位移
+        double dcct = _Vel / _Acc;  // 减速时间
+        double dccd = _Acc * dcct * dcct / 2;  // 减速位移
+
+        if (D < aV0 * aV0 / (2 * _Acc))    // 两点之间距离小于加速距离, 这行写错了吧???, 测试结果:一直不执行
+        {
+            double t1 = (V0 < 0) ? 2.0 * aV0 / _Acc : 0.0;
             double t2 = aV0 / _Acc;
-            dtxyz     = t1 + t2;                 
-          }
-          else if (D < accd + dccd)
-          {
-            double t1 = (V0 < 0)?2.0 * aV0 / _Acc:0.0;
+            dtxyz = t1 + t2;
+        }
+        else if (D < accd + dccd)    // 两点之间距离小于加速距离+减速距离
+        {
+            double t1 = (V0 < 0) ? 2.0 * aV0 / _Acc : 0.0;
             double t2 = (-aV0 + sqrt(aV0 * aV0 + _Acc * D - aV0 * aV0 / 2)) / _Acc;
             double t3 = (aV0 + _Acc * t2) / _Acc;
-            dtxyz     = t1 + t2 + t3;    
-          }
-          else
-          {
-            double t1 = acct;                              
+            dtxyz = t1 + t2 + t3;  
+        }
+        else    // 正常情况,两点之间距离=加速距离+匀速距离+减速距离
+        {
+            double t1 = acct;
             double t2 = (D - accd - dccd) / _Vel;
             double t3 = dcct;
-            dtxyz     = t1 + t2 + t3;                                                                  
-          }
-          corridor[k].t = dtxyz;
-      }
+            dtxyz = t1 + t2 + t3;
+        }
+        corridor[k].t = dtxyz;  // 一共points.size()-1条轨迹
+    }
 }
 
 int main(int argc, char** argv)
@@ -1163,9 +1189,9 @@ int main(int argc, char** argv)
     ros::init(argc, argv, "b_traj_node");
     ros::NodeHandle nh("~");
 
-    _map_sub  = nh.subscribe( "map",       1, rcvPointCloudCallBack );
-    _odom_sub = nh.subscribe( "odometry",  1, rcvOdometryCallbck);
-    _pts_sub  = nh.subscribe( "waypoints", 1, rcvWaypointsCallback );
+    _map_sub  = nh.subscribe( "map",       1, rcvPointCloudCallBack );  // 订阅局部地图信息, 填充障碍和检查轨迹
+    _odom_sub = nh.subscribe( "odometry",  1, rcvOdometryCallbck);      // 订阅里程计信息, 更新当前位置和发布无人机的tf
+    _pts_sub  = nh.subscribe( "waypoints", 1, rcvWaypointsCallback );   // 订阅目标点信息, 生成第一条轨迹
 
     _inf_map_vis_pub   = nh.advertise<sensor_msgs::PointCloud2>("vis_map_inflate", 1);
     _local_map_vis_pub = nh.advertise<sensor_msgs::PointCloud2>("vis_map_local", 1);
@@ -1179,7 +1205,7 @@ int main(int argc, char** argv)
 
     _traj_pub = nh.advertise<quadrotor_msgs::PolynomialTrajectory>("trajectory", 10);
 
-    nh.param("map/margin",     _cloud_margin, 0.25);
+    nh.param("map/margin",     _cloud_margin, 0.25);    // 障碍物膨胀半径
     nh.param("map/resolution", _resolution, 0.2);
     
     nh.param("map/x_size",       _x_size, 50.0);
@@ -1196,17 +1222,17 @@ int main(int argc, char** argv)
     
     nh.param("planning/max_vel",       _MAX_Vel,  1.0);
     nh.param("planning/max_acc",       _MAX_Acc,  1.0);
-    nh.param("planning/max_inflate",   _max_inflate_iter, 100);
-    nh.param("planning/step_length",   _step_length,     2);
+    nh.param("planning/max_inflate",   _max_inflate_iter, 100);  // 膨胀cube时的最大迭代次数
+    nh.param("planning/step_length",   _step_length,     2);     // 膨胀cube时的步长
     nh.param("planning/cube_margin",   _cube_margin,   0.2);
-    nh.param("planning/check_horizon", _check_horizon,10.0);
-    nh.param("planning/stop_horizon",  _stop_horizon,  5.0);
+    nh.param("planning/check_horizon", _check_horizon,10.0);     // 检查碰撞的范围, 单位: s
+    nh.param("planning/stop_horizon",  _stop_horizon,  5.0);     // 终止运动的碰撞范围, 单位: s
     nh.param("planning/is_limit_vel",  _is_limit_vel,  false);
     nh.param("planning/is_limit_acc",  _is_limit_acc,  false);
     nh.param("planning/is_use_fm",     _is_use_fm,  true);
 
-    nh.param("optimization/min_order",  _minimize_order, 3.0);
-    nh.param("optimization/poly_order", _traj_order,    10);
+    nh.param("optimization/min_order",  _minimize_order, 3.0);  // 优化过程中, minimize的阶数  1 -> velocity, 2 -> acceleration, 3 -> jerk, 4 -> snap
+    nh.param("optimization/poly_order", _traj_order,     10);   // 轨迹的阶数, 系数的个数为_traj_order+1
 
     nh.param("vis/vis_traj_width", _vis_traj_width, 0.15);
     nh.param("vis/is_proj_cube",   _is_proj_cube, true);
@@ -1215,6 +1241,7 @@ int main(int argc, char** argv)
     if(_bernstein.setParam(3, 12, _minimize_order) == -1)
         ROS_ERROR(" The trajectory order is set beyond the library's scope, please re-set "); 
 
+    // 获得所选多项式阶数对应的参数, 注意这只是one block
     _MQM = _bernstein.getMQM()[_traj_order];
     _FM  = _bernstein.getFM()[_traj_order];
     _C   = _bernstein.getC()[_traj_order];
@@ -1222,7 +1249,7 @@ int main(int argc, char** argv)
     _Ca  = _bernstein.getC_a()[_traj_order];
     _Cj  = _bernstein.getC_j()[_traj_order];
 
-    _map_origin << -_x_size/2.0, -_y_size/2.0, 0.0;
+    _map_origin << -_x_size/2.0, -_y_size/2.0, 0.0;    // -25,-25,0
     _pt_max_x = + _x_size / 2.0;
     _pt_min_x = - _x_size / 2.0;
     _pt_max_y = + _y_size / 2.0;
@@ -1238,15 +1265,16 @@ int main(int argc, char** argv)
     _max_local_y_id = (int)(_y_local_size * _inv_resolution);
     _max_local_z_id = (int)(_z_local_size * _inv_resolution);
 
-    Vector3i GLSIZE(_max_x_id, _max_y_id, _max_z_id);
-    Vector3i LOSIZE(_max_local_x_id, _max_local_y_id, _max_local_z_id);
+    Vector3i GLSIZE(_max_x_id, _max_y_id, _max_z_id);     // global_map size
+    Vector3i LOSIZE(_max_local_x_id, _max_local_y_id, _max_local_z_id);     // local_map size
 
     path_finder = new gridPathFinder(GLSIZE, LOSIZE);
-    path_finder->initGridNodeMap(_resolution, _map_origin);
+    path_finder->initGridNodeMap(_resolution, _map_origin);  // 初始化全局网格地图
 
     Translation3d origin_translation( _map_origin(0), _map_origin(1), 0.0);
-    Quaterniond origin_rotation(1.0, 0.0, 0.0, 0.0);
+    Quaterniond origin_rotation(1.0, 0.0, 0.0, 0.0);    // 0°
     Affine3d origin_transform = origin_translation * origin_rotation;
+    // global_map
     collision_map = new CollisionMapGrid(origin_transform, "world", _resolution, _x_size, _y_size, _z_size, _free_cell);
 
     ros::Rate rate(100);
@@ -1261,6 +1289,7 @@ int main(int argc, char** argv)
     return 0;
 }
 
+// 将一条完整的轨迹信息封装到msg中
 quadrotor_msgs::PolynomialTrajectory getBezierTraj()
 {
     quadrotor_msgs::PolynomialTrajectory traj;
@@ -1280,46 +1309,47 @@ quadrotor_msgs::PolynomialTrajectory getBezierTraj()
       {    
           for(int j =0; j < poly_num1d; j++)
           { 
-              traj.coef_x[idx] = _bezier_coeff(i,                  j);
-              traj.coef_y[idx] = _bezier_coeff(i,     poly_num1d + j);
-              traj.coef_z[idx] = _bezier_coeff(i, 2 * poly_num1d + j);
+              traj.coef_x[idx] = _bezier_coeff(i,                  j);  // x
+              traj.coef_y[idx] = _bezier_coeff(i,     poly_num1d + j);  // y
+              traj.coef_z[idx] = _bezier_coeff(i, 2 * poly_num1d + j);  // z
               idx++;
           }
       }
 
       traj.header.frame_id = "/bernstein";
-      traj.header.stamp = _odom.header.stamp; 
-      _start_time = traj.header.stamp;
+      traj.header.stamp = _odom.header.stamp;  // 注意, 以里程计的时间戳作为轨迹是时间戳
+      _start_time = traj.header.stamp;  // 检查轨迹是否碰撞时会使用
 
       traj.time.resize(_seg_num);
       traj.order.resize(_seg_num);
 
       traj.mag_coeff = 1.0;
-      for (int idx = 0; idx < _seg_num; ++idx){
+      for (int idx = 0; idx < _seg_num; ++idx)
+      {
           traj.time[idx] = _seg_time(idx);
           traj.order[idx] = _traj_order;
       }
-      
+
       traj.start_yaw = 0.0;
       traj.final_yaw = 0.0;
 
       traj.trajectory_id = _traj_id;
-      traj.action = quadrotor_msgs::PolynomialTrajectory::ACTION_ADD;
 
       return traj;
 }
 
 Vector3d getPosFromBezier(const MatrixXd & polyCoeff, double t_now, int seg_now )
 {
-    Vector3d ret = VectorXd::Zero(3);
+    Vector3d ret = VectorXd::Zero(3); // x, y, z轴的pos
     VectorXd ctrl_now = polyCoeff.row(seg_now);
     int ctrl_num1D = polyCoeff.cols() / 3;
 
-    for(int i = 0; i < 3; i++)
-        for(int j = 0; j < ctrl_num1D; j++)
-            ret(i) += _C(j) * ctrl_now(i * ctrl_num1D + j) * pow(t_now, j) * pow((1 - t_now), (_traj_order - j) ); 
+    for (int i = 0; i < 3; i++) // x, y, z
+        for (int j = 0; j < ctrl_num1D; j++)
+            // ret(i) += Cnj * Cj * t^j * (1-t)^(n-j), 贝塞尔曲线的标准形式
+            ret(i) += _C(j) * ctrl_now(i * ctrl_num1D + j) * pow(t_now, j) * pow((1 - t_now), (_traj_order - j));
 
-    return ret;  
+    return ret;
 }
 
 VectorXd getStateFromBezier(const MatrixXd & polyCoeff, double t_now, int seg_now )
@@ -1403,11 +1433,11 @@ visualization_msgs::MarkerArray cube_vis;
 void visCorridor(vector<Cube> corridor)
 {   
     for(auto & mk: cube_vis.markers) 
-        mk.action = visualization_msgs::Marker::DELETE;
+        mk.action = visualization_msgs::Marker::DELETE;  // 删除上一次的cube
     
     _corridor_vis_pub.publish(cube_vis);
 
-    cube_vis.markers.clear();
+    cube_vis.markers.clear();  // 和DELETE操作重复
 
     visualization_msgs::Marker mk;
     mk.header.frame_id = "world";
@@ -1435,7 +1465,7 @@ void visCorridor(vector<Cube> corridor)
         mk.pose.position.y = (corridor[i].vertex(0, 1) + corridor[i].vertex(1, 1) ) / 2.0; 
 
         if(_is_proj_cube)
-            mk.pose.position.z = 0.0; 
+            mk.pose.position.z = 0.0;   // 二维
         else
             mk.pose.position.z = (corridor[i].vertex(0, 2) + corridor[i].vertex(4, 2) ) / 2.0; 
 
@@ -1466,7 +1496,7 @@ void visBezierTrajectory(MatrixXd polyCoeff, VectorXd time)
     traj_vis.type = visualization_msgs::Marker::SPHERE_LIST;
     
     traj_vis.action = visualization_msgs::Marker::DELETE;
-    _checkTraj_vis_pub.publish(traj_vis);
+    _checkTraj_vis_pub.publish(traj_vis); // 删除以前的轨迹
     _stopTraj_vis_pub.publish(traj_vis);
 
     traj_vis.action = visualization_msgs::Marker::ADD;
@@ -1488,21 +1518,25 @@ void visBezierTrajectory(MatrixXd polyCoeff, VectorXd time)
     cur.setZero();
     pre.setZero();
     
-    traj_vis.points.clear();
+    traj_vis.points.clear(); // 清空以前的轨迹点
 
     Vector3d state;
     geometry_msgs::Point pt;
 
-    int segment_num  = polyCoeff.rows();
-    for(int i = 0; i < segment_num; i++ ){
-        for (double t = 0.0; t < 1.0; t += 0.05 / time(i), count += 1){
-            state = getPosFromBezier( polyCoeff, t, i );
-            cur(0) = pt.x = time(i) * state(0);
+    int segment_num = polyCoeff.rows();
+    for (int i = 0; i < segment_num; i++)
+    {
+        // 因为是标准的贝塞尔曲线, 所以需考虑缩放系数
+        for (double t = 0.0; t < 1.0; t += 0.05 / time(i), count++)
+        {
+            state = getPosFromBezier(polyCoeff, t, i); // 从标准的贝塞尔曲线得到pos
+            cur(0) = pt.x = time(i) * state(0); // 这里的time(i)是比例系数,将坐标放大到真实值
             cur(1) = pt.y = time(i) * state(1);
             cur(2) = pt.z = time(i) * state(2);
             traj_vis.points.push_back(pt);
 
-            if (count) traj_len += (pre - cur).norm();
+            if (count)
+                traj_len += (pre - cur).norm(); // 轨迹长度
             pre = cur;
         }
     }
@@ -1515,9 +1549,9 @@ visualization_msgs::MarkerArray grid_vis;
 void visGridPath( vector<Vector3d> grid_path )
 {   
     for(auto & mk: grid_vis.markers) 
-        mk.action = visualization_msgs::Marker::DELETE;
+        mk.action = visualization_msgs::Marker::DELETE;   // 删除上次搜索的路径
 
-    _grid_path_vis_pub.publish(grid_vis);
+    _grid_path_vis_pub.publish(grid_vis);   // 更新
     grid_vis.markers.clear();
 
     visualization_msgs::Marker mk;

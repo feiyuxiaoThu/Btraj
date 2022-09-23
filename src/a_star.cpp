@@ -5,28 +5,32 @@ using namespace Eigen;
 using namespace sdf_tools;
 
 void gridPathFinder::initGridNodeMap(double _resolution, Vector3d global_xyz_l)
-{   
+{
     gl_xl = global_xyz_l(0);
     gl_yl = global_xyz_l(1);
     gl_zl = global_xyz_l(2);
 
     resolution = _resolution;
-    inv_resolution = 1.0 / _resolution;    
+    inv_resolution = 1.0 / _resolution;
 
-    GridNodeMap = new GridNodePtr ** [GLX_SIZE];
-    for(int i = 0; i < GLX_SIZE; i++){
-       GridNodeMap[i] = new GridNodePtr * [GLY_SIZE];
-       for(int j = 0; j < GLY_SIZE; j++){
-           GridNodeMap[i][j] = new GridNodePtr [GLZ_SIZE];
-           for( int k = 0; k < GLZ_SIZE;k++){
-                Vector3i tmpIdx(i,j,k);
+    GridNodeMap = new GridNodePtr **[GLX_SIZE];
+    for (int i = 0; i < GLX_SIZE; i++)
+    {
+        GridNodeMap[i] = new GridNodePtr *[GLY_SIZE];
+        for (int j = 0; j < GLY_SIZE; j++)
+        {
+            GridNodeMap[i][j] = new GridNodePtr[GLZ_SIZE];
+            for (int k = 0; k < GLZ_SIZE; k++)
+            {
+                Vector3i tmpIdx(i, j, k);
                 Vector3d pos = gridIndex2coord(tmpIdx);
                 GridNodeMap[i][j][k] = new GridNode(tmpIdx, pos);
-           }
-       }
+            }
+        }
     }
 }
 
+// 用collision_map_local来填充GridNodeMap,用于A*搜索
 void gridPathFinder::linkLocalMap(CollisionMapGrid * local_map, Vector3d xyz_l)
 {    
     Vector3d coord; 
@@ -42,13 +46,14 @@ void gridPathFinder::linkLocalMap(CollisionMapGrid * local_map, Vector3d xyz_l)
 
                 Vector3i index = coord2gridIndex(coord);
 
+                // 判断局部地图是否超出全局地图的范围
                 if( index(0) >= GLX_SIZE || index(1) >= GLY_SIZE || index(2) >= GLZ_SIZE 
                  || index(0) <  0 || index(1) < 0 || index(2) <  0 )
                     continue;
 
                 GridNodePtr ptr = GridNodeMap[index(0)][index(1)][index(2)];
                 ptr->id = 0;
-                ptr->occupancy = local_map->Get(i, j, k ).first.occupancy;
+                ptr->occupancy = local_map->Get(i, j, k ).first.occupancy;  // 填充GridNodeMap
             }
         }
     }
@@ -57,7 +62,7 @@ void gridPathFinder::linkLocalMap(CollisionMapGrid * local_map, Vector3d xyz_l)
 void gridPathFinder::resetLocalMap()
 {   
     //ROS_WARN("expandedNodes size : %d", expandedNodes.size());
-    for(auto tmpPtr:expandedNodes)
+    for(auto tmpPtr:expandedNodes)  // 访问过的节点(已从openSet中删除)
     {
         tmpPtr->occupancy = 0; // forget the occupancy
         tmpPtr->id = 0;
@@ -66,7 +71,7 @@ void gridPathFinder::resetLocalMap()
         tmpPtr->fScore = inf;
     }
 
-    for(auto ptr:openSet)
+    for(auto ptr:openSet)   // 扩展过的节点,但未被访问(仍然在openSet中)
     {   
         GridNodePtr tmpPtr = ptr.second;
         tmpPtr->occupancy = 0; // forget the occupancy
@@ -114,7 +119,7 @@ Vector3i gridPathFinder::coord2gridIndex(Vector3d pt)
 }
 
 double gridPathFinder::getDiagHeu(GridNodePtr node1, GridNodePtr node2)
-{   
+{
     double dx = abs(node1->index(0) - node2->index(0));
     double dy = abs(node1->index(1) - node2->index(1));
     double dz = abs(node1->index(2) - node2->index(2));
@@ -125,13 +130,16 @@ double gridPathFinder::getDiagHeu(GridNodePtr node1, GridNodePtr node2)
     dy -= diag;
     dz -= diag;
 
-    if (dx == 0) {
+    if (dx == 0)
+    {
         h = 1.0 * sqrt(3.0) * diag + sqrt(2.0) * min(dy, dz) + 1.0 * abs(dy - dz);
     }
-    if (dy == 0) {
+    if (dy == 0)
+    {
         h = 1.0 * sqrt(3.0) * diag + sqrt(2.0) * min(dx, dz) + 1.0 * abs(dx - dz);
     }
-    if (dz == 0) {
+    if (dz == 0)
+    {
         h = 1.0 * sqrt(3.0) * diag + sqrt(2.0) * min(dx, dy) + 1.0 * abs(dx - dy);
     }
     return h;
@@ -178,8 +186,8 @@ vector<GridNodePtr> gridPathFinder::getVisitedNodes()
         for(int j = 0; j < GLY_SIZE; j++)
             for(int k = 0; k < GLZ_SIZE; k++)
             {   
-                if(GridNodeMap[i][j][k]->id != 0)
-                //if(GridNodeMap[i][j][k]->id == -1)
+                if(GridNodeMap[i][j][k]->id != 0)      // 所有扩展过的节点
+                //if(GridNodeMap[i][j][k]->id == -1)   // 所有访问过的节点
                     visited_nodes.push_back(GridNodeMap[i][j][k]);
             }
 
@@ -192,6 +200,7 @@ vector<GridNodePtr> gridPathFinder::getVisitedNodes()
     neighborPtr->occupancy > 0.5
 }
 */
+
 void gridPathFinder::AstarSearch(Eigen::Vector3d start_pt, Eigen::Vector3d end_pt)
 {   
     ros::Time time_1 = ros::Time::now();    
@@ -228,64 +237,72 @@ void gridPathFinder::AstarSearch(Eigen::Vector3d start_pt, Eigen::Vector3d end_p
             ROS_WARN("Time consume in A star path finding is %f", (time_2 - time_1).toSec() );
             gridPath = retrievePath(current);
             return;
-        }         
-        openSet.erase(openSet.begin());
-        current -> id = -1; //move current node from open set to closed set.
+        }
+
+        openSet.erase(openSet.begin());  // 弹出openSet第一个节点后,将其删除,这保证了openSet中第一个元素始终为未访问过的f值最小的节点
+        current -> id = -1; // 将访问过的节点加入closeSet
         expandedNodes.push_back(current);
 
-        for(int dx = -1; dx < 2; dx++)
-            for(int dy = -1; dy < 2; dy++)
-                for(int dz = -1; dz < 2; dz++)
+        // 在3*3*3范围内扩展某个节点
+        for (int dx = -1; dx < 2; dx++)
+            for (int dy = -1; dy < 2; dy++)
+                for (int dz = -1; dz < 2; dz++)
                 {
-                    if(dx == 0 && dy == 0 && dz ==0)
-                        continue; 
+                    if (dx == 0 && dy == 0 && dz == 0)  // 跳过当前节点
+                        continue;
 
                     Vector3i neighborIdx;
-                    neighborIdx(0) = (current -> index)(0) + dx;
-                    neighborIdx(1) = (current -> index)(1) + dy;
-                    neighborIdx(2) = (current -> index)(2) + dz;
+                    neighborIdx(0) = (current->index)(0) + dx;
+                    neighborIdx(1) = (current->index)(1) + dy;
+                    neighborIdx(2) = (current->index)(2) + dz;
 
-                    if(    neighborIdx(0) < 0 || neighborIdx(0) >= GLX_SIZE
-                        || neighborIdx(1) < 0 || neighborIdx(1) >= GLY_SIZE
-                        || neighborIdx(2) < 0 || neighborIdx(2) >= GLZ_SIZE){
+                    if (neighborIdx(0) < 0 || neighborIdx(0) >= GLX_SIZE    // 跳过超出地图范围的节点
+                     || neighborIdx(1) < 0 || neighborIdx(1) >= GLY_SIZE 
+                     || neighborIdx(2) < 0 || neighborIdx(2) >= GLZ_SIZE)
+                    {
                         continue;
                     }
 
+                    // 扩展的每个节点都使用之前初始化的全局地图的内存,不需重新为neighborNodes开辟新的内存,后面的操作都是针对GridNodeMap内存的操作
                     neighborPtr = GridNodeMap[neighborIdx(0)][neighborIdx(1)][neighborIdx(2)];
 
-/*                    if(minClearance() == false){
+                    /*if(minClearance() == false)
+                    {
                         continue;
                     }*/
 
-                    if(neighborPtr -> occupancy > 0.5){
-                        continue;
+                    if (neighborPtr->occupancy > 0.5)
+                    {
+                        continue;   // 有障碍物
                     }
 
-                    if(neighborPtr -> id == -1){
-                        continue; //in closed set.
+                    if (neighborPtr->id == -1)
+                    {
+                        continue;   // 该节点已经被访问过
                     }
 
                     double static_cost = sqrt(dx * dx + dy * dy + dz * dz);
-                    
-                    tentative_gScore = current -> gScore + static_cost; 
 
-                    if(neighborPtr -> id != 1){
-                        //discover a new node
-                        neighborPtr -> id        = 1;
-                        neighborPtr -> cameFrom  = current;
-                        neighborPtr -> gScore    = tentative_gScore;
-                        neighborPtr -> fScore    = neighborPtr -> gScore + getHeu(neighborPtr, endPtr); 
-                        neighborPtr -> nodeMapIt = openSet.insert( make_pair(neighborPtr->fScore, neighborPtr) ); //put neighbor in open set and record it.
+                    tentative_gScore = current->gScore + static_cost;
+
+                    if (neighborPtr->id != 1)   // 发现一个新的节点
+                    {
+                        neighborPtr->id = 1;
+                        neighborPtr->cameFrom = current;
+                        neighborPtr->gScore = tentative_gScore;
+                        neighborPtr->fScore = neighborPtr->gScore + getHeu(neighborPtr, endPtr);
+                        // 此后neighborPtr->nodeMapIt一直指向当前insert的节点
+                        neighborPtr->nodeMapIt = openSet.insert(make_pair(neighborPtr->fScore, neighborPtr)); // 将该节点加入openSet,并记录位置
                         continue;
                     }
-                    else if(tentative_gScore <= neighborPtr-> gScore){ //in open set and need update
-                        neighborPtr -> cameFrom = current;
-                        neighborPtr -> gScore = tentative_gScore;
-                        neighborPtr -> fScore = tentative_gScore + getHeu(neighborPtr, endPtr); 
-                        openSet.erase(neighborPtr -> nodeMapIt);
-                        neighborPtr -> nodeMapIt = openSet.insert( make_pair(neighborPtr->fScore, neighborPtr) ); //put neighbor in open set and record it.
+                    else if (tentative_gScore <= neighborPtr->gScore)   // 该节点已经在openSet中,且之前路径的cost小于当前路径的cost,需要更新
+                    {
+                        neighborPtr->cameFrom = current;
+                        neighborPtr->gScore = tentative_gScore;
+                        neighborPtr->fScore = tentative_gScore + getHeu(neighborPtr, endPtr);
+                        openSet.erase(neighborPtr->nodeMapIt);  // 删除该节点在openSet中的存储,不影响节点本身的数据
+                        neighborPtr->nodeMapIt = openSet.insert(make_pair(neighborPtr->fScore, neighborPtr)); // 将该节点重新加入openSet,并记录位置
                     }
-                        
                 }
     }
 
@@ -297,7 +314,7 @@ vector<Vector3d> gridPathFinder::getPath()
 {   
     vector<Vector3d> path;
 
-    for(auto ptr: gridPath)
+    for(auto ptr: gridPath)   // gridPath为路径的节点列表,这里转换为位置列表
         path.push_back(ptr->coord);
 
     reverse(path.begin(), path.end());

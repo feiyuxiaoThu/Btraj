@@ -14,11 +14,11 @@ MatrixXd Bernstein::CholeskyDecomp(MatrixXd Q) // return square root F of Q; Q =
 
 int Bernstein::setParam(int poly_order_min, int poly_order_max, double min_order)
 {
-	int ret = (poly_order_min >=3 && poly_order_max <= 13) ? 1 : -1; // Now we only applied for poly order from 3 ~ 12 ( num of control from 4 ~ 13 )
+	int ret = (poly_order_min >=3 && poly_order_max <= 12) ? 1 : -1; // Now we only applied for poly order from 3 ~ 12 ( num of control from 4 ~ 13 )
 
 	_order_min = poly_order_min;
 	_order_max = poly_order_max;
-	_min_order = min_order; 
+	_min_order = min_order;
 
 	const static auto factorial = [](int n)
 	{
@@ -30,7 +30,8 @@ int Bernstein::setParam(int poly_order_min, int poly_order_max, double min_order
         return fact; 
 	};
 
-	const static auto combinatorial = [](int n, int k) // for calculate n choose k combination problem
+    // for calculate n choose k combination problem
+	const static auto combinatorial = [](int n, int k)  
 	{
 		return factorial(n) / (factorial(k) * factorial(n - k));
 	};
@@ -44,6 +45,7 @@ int Bernstein::setParam(int poly_order_min, int poly_order_max, double min_order
 	{	
 		MatrixXd M;   // Mapping matrix, used to map the coefficients of the bezier curve to a monomial polynomial .
 
+        // t ∈ [0,1]
 		MatrixXd Q, Q_l, Q_u; // Cost Hessian matrix in each block of the objective. No scale, only meta elements .
 		MatrixXd MQM; 	      // M' * Q * M in each block of the objective. No scale, only meta elements .
 		
@@ -52,7 +54,7 @@ int Bernstein::setParam(int poly_order_min, int poly_order_max, double min_order
 		VectorXd C_a; // Acceleration coefficients vector.
 		VectorXd C_j; // Acceleration coefficients vector.
 
-		int poly_num1D = order + 1; 
+		int poly_num1D = order + 1;
 		M.resize(order + 1, order + 1);
 		Q_l = MatrixXd::Zero(order + 1, order + 1);
 		Q_u = MatrixXd::Zero(order + 1, order + 1);
@@ -78,7 +80,7 @@ int Bernstein::setParam(int poly_order_min, int poly_order_max, double min_order
 		    	{
 		      		int coeff = 1.0;
 		            int _d = min_order_l - 1;
-		                
+		            
 		            while(_d >= 0)
 		            {
 		                coeff = coeff * (i - _d) * (j - _d);
@@ -89,31 +91,42 @@ int Bernstein::setParam(int poly_order_min, int poly_order_max, double min_order
 		    	}
 		  	}
 		}
+        // cout << "Q_l = " << endl;
+        // cout << Q_l << endl;
 
 		if( poly_num1D > min_order_u )
 		{
-			for( int i = min_order_u; i < poly_num1D; i ++ )
+            // 这部分把每项系数都写成(3*2*1),(4*3*2),... 按照此形式计算,即可推导出下面结果
+			for( int i = min_order_u; i < poly_num1D; i ++ )  // i,j对应的是p的系数
 			{
 		    	for(int j = min_order_u; j < poly_num1D; j ++ )
 		    	{
 		      		int coeff = 1.0;
 		            int _d = min_order_u - 1;
 		                
-		            while(_d >= 0)
+		            while(_d >= 0)  // 计算 [f的n阶导数]^2 的系数
 		            {
-		                coeff = coeff * (i - _d) * (j - _d);
+		                coeff = coeff * (i - _d) * (j - _d);  // 这里交叉项没有*2是因为:存入矩阵时,也要将一项分成2个对称项
 		                _d -= 1;
 		            }
-
-		            Q_u(i,j) = double(coeff) / double(i + j - 2 * min_order_u + 1);
+                    
+		            Q_u(i,j) = double(coeff) / double(i + j - 2 * min_order_u + 1); // 分母为积分后t的次数
 		    	}
 		  	}
 		}
+        // cout << "Q_u = " << endl;
+        // cout << Q_u << endl;
 
+        // 计算出的Q矩阵时间域为[0,1]
 		if(min_order_l == min_order_u)
 			Q = Q_u;
 		else
+            // 若minimum导数的阶次不是整数,这里计算分别上下限,然后加权
+            // 例如: _min_order = 2.7, 则 Q = 0.7 * Q_u + 0.3 * Q_l
 			Q = (_min_order - min_order_l) * Q_u + (min_order_u - _min_order) * Q_l;
+
+        // cout << "Q = " << endl;
+        // cout << Q << endl;
 
 	 	switch(order)
 		{	
@@ -271,13 +284,16 @@ int Bernstein::setParam(int poly_order_min, int poly_order_max, double min_order
 		MList.push_back(M);
 		MQM = M.transpose() * Q * M; // Get the cost block after mapping the coefficients
 
+        // cout << "MQM = " << endl;
+        // cout << MQM << endl;
+
 		MatrixXd F  = CholeskyDecomp(Q);
 		MatrixXd FM = F * M;
 
 		MQMList.push_back(MQM);
 		FMList.push_back(FM);
 
-		int n = order;
+		int n = order;  // order为多项式次数
 		for(int k = 0; k <= n; k ++ )
 		{
 			C(k)   = combinatorial(n, k);

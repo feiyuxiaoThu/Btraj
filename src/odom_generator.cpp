@@ -43,7 +43,7 @@ void pubOdom()
 	    odom.twist.twist.linear.y = _cmd.velocity.y;
 	    odom.twist.twist.linear.z = _cmd.velocity.z;
 
-	    odom.twist.twist.angular.x = _cmd.acceleration.x;
+	    odom.twist.twist.angular.x = _cmd.acceleration.x; // 角速度对应加速度
 	    odom.twist.twist.angular.y = _cmd.acceleration.y;
 	    odom.twist.twist.angular.z = _cmd.acceleration.z;
 	}
